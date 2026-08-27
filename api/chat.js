@@ -1,6 +1,6 @@
 // =====================================================================
 // /api/chat — принимает сообщения из мини-приложения и обращается
-// к нейросети Google Gemini. Системный промт строится из настроек
+// к нейросети Claude (Anthropic). Системный промт строится из настроек
 // клиники, хранящихся в Supabase (clinic_settings) — то есть если
 // врач поменяет цены в "Кабинете врача", ассистент сразу узнает об этом.
 // =====================================================================
@@ -36,7 +36,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const { messages } = req.body;
+    const { messages } = req.body; // messages: [{role: "user"|"assistant", content: "..."}]
 
     if (!Array.isArray(messages) || messages.length === 0) {
       res.status(400).json({ error: "messages is required" });
@@ -46,35 +46,31 @@ module.exports = async (req, res) => {
     const cfg = await getSettings();
     const systemPrompt = defaultConfig.systemPromptTemplate(cfg);
 
-    const geminiContents = messages.slice(-20).map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: geminiContents,
-          generationConfig: { maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
-        }),
-      }
-    );
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 500,
+        system: systemPrompt,
+        messages: messages.slice(-20), // держим последние 20 сообщений
+      }),
+    });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error("Gemini API error:", errText);
+      console.error("Anthropic API error:", errText);
       res.status(502).json({ error: "AI service error" });
       return;
     }
 
     const data = await response.json();
-    const reply =
-      data.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "Извините, не получилось сформировать ответ.";
+    const textBlock = (data.content || []).find((c) => c.type === "text");
+    const reply = textBlock ? textBlock.text : "Извините, не получилось сформировать ответ.";
 
     res.status(200).json({ reply });
   } catch (err) {

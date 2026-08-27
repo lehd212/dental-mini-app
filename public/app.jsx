@@ -1894,22 +1894,12 @@ export default function App() {
     );
 
   return (
-    <div className="w-full h-full flex items-center justify-center" style={{ background: "#D9E7F2", minHeight: 640 }}>
+    <div className="flex flex-col" style={{ background: C.bg, height: "100dvh", width: "100%", overflow: "hidden" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap');`}</style>
-      <div
-        className="flex flex-col overflow-hidden"
-        style={{
-          width: 390,
-          height: 720,
-          background: C.bg,
-          borderRadius: 32,
-          boxShadow: "0 30px 60px rgba(8,43,77,0.25)",
-          border: "1px solid rgba(255,255,255,0.5)",
-        }}
-      >
-        <div key={configVersion}>{body}</div>
-        {["home", "doctors", "assistant", "profile"].includes(screen) && <BottomNav screen={screen} navigate={navigate} />}
+      <div key={configVersion} className="flex-1 min-h-0 flex flex-col">
+        {body}
       </div>
+      {["home", "doctors", "assistant", "profile"].includes(screen) && <BottomNav screen={screen} navigate={navigate} />}
     </div>
   );
 }
