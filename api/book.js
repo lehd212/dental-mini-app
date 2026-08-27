@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
         name,
         phone,
         service,
-        doctor: doctorPreference || null, // здесь хранится предпочтение по полу врача (Мужчина/Женщина/Неважно)
+        doctor: doctorPreference || null,
         appointment_date: date, // формат YYYY-MM-DD
         appointment_time: time, // формат HH:MM
         reminder_sent: false,
@@ -56,7 +56,7 @@ module.exports = async (req, res) => {
     const confirmText =
       `✅ Вы записаны!\n\n` +
       `Услуга: ${service}\n` +
-      (doctorPreference ? `Предпочтение по врачу: ${doctorPreference}\n` : "") +
+      (doctorPreference ? `Врач: ${doctorPreference}\n` : "") +
       `Дата: ${date}\n` +
       `Время: ${time}\n\n` +
       `Если планы изменятся — напишите нам, пожалуйста, заранее.`;
@@ -66,6 +66,34 @@ module.exports = async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: tgUser.id, text: confirmText }),
     });
+
+    // Уведомляем всех врачей/администраторов, которые хотя бы раз
+    // заходили в "Кабинет врача" — им приходит сообщение о новой записи
+    // сразу в момент, когда пациент записался.
+    try {
+      const { data: staff } = await supabase.from("staff_telegram").select("telegram_user_id");
+      const staffText =
+        `🆕 Новая запись на приём\n\n` +
+        `Пациент: ${name}\n` +
+        `Телефон: ${phone}\n` +
+        `Услуга: ${service}\n` +
+        (doctorPreference ? `Врач: ${doctorPreference}\n` : "") +
+        `Дата: ${date}\n` +
+        `Время: ${time}`;
+
+      await Promise.all(
+        (staff || []).map((s) =>
+          fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: s.telegram_user_id, text: staffText }),
+          })
+        )
+      );
+    } catch (notifyErr) {
+      // Если уведомление врачу не ушло — это не должно ломать саму запись пациента
+      console.error("Staff notify error:", notifyErr);
+    }
 
     res.status(200).json({ success: true, booking: data });
   } catch (err) {

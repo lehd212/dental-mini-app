@@ -13,6 +13,26 @@ const clinicConfig = require("../lib/clinic-config");
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
+async function getReminderSettings() {
+  try {
+    const { data } = await supabase.from("clinic_settings").select("data").eq("id", 1).single();
+    if (data?.data) {
+      return {
+        reminderHoursBefore: data.data.reminderHoursBefore ?? clinicConfig.reminderHoursBefore,
+        clinicName: data.data.clinicName ?? clinicConfig.clinicName,
+        address: data.data.address ?? clinicConfig.address,
+      };
+    }
+  } catch (e) {
+    // используем значения по умолчанию ниже
+  }
+  return {
+    reminderHoursBefore: clinicConfig.reminderHoursBefore,
+    clinicName: clinicConfig.clinicName,
+    address: clinicConfig.address,
+  };
+}
+
 module.exports = async (req, res) => {
   // Проверка секрета — берём из query-параметра ?secret=...
   if (req.query.secret !== process.env.REMINDER_SECRET) {
@@ -21,8 +41,9 @@ module.exports = async (req, res) => {
   }
 
   try {
+    const cfg = await getReminderSettings();
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + clinicConfig.reminderHoursBefore * 60 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + cfg.reminderHoursBefore * 60 * 60 * 1000);
 
     // Берём неотправленные напоминания по подтверждённым записям
     const { data: bookings, error } = await supabase
@@ -47,11 +68,11 @@ module.exports = async (req, res) => {
         const text =
           `⏰ Напоминание о приёме!\n\n` +
           `Услуга: ${booking.service}\n` +
-          (booking.doctor ? `Предпочтение по врачу: ${booking.doctor}\n` : "") +
+          (booking.doctor ? `Врач: ${booking.doctor}\n` : "") +
           `Дата: ${booking.appointment_date}\n` +
           `Время: ${booking.appointment_time}\n\n` +
-          `Ждём вас в клинике "${clinicConfig.clinicName}"!\n` +
-          `Адрес: ${clinicConfig.address}`;
+          `Ждём вас в клинике "${cfg.clinicName}"!\n` +
+          `Адрес: ${cfg.address}`;
 
         await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",

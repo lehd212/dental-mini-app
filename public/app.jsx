@@ -63,7 +63,7 @@ function ToothIcon({ size = 24, color = "#FFFFFF" }) {
 /* DATA                                                                 */
 /* ------------------------------------------------------------------ */
 
-const CLINIC = {
+let CLINIC = {
   name: "Dr. Radjabov",
   fullName: "Стоматологическая клиника Dr. Radjabov",
   city: "г. Самарканд",
@@ -227,6 +227,116 @@ async function submitBookingToServer({ treatment, doctor, date, time, phone }) {
   }
 }
 
+// Загружает актуальные настройки клиники и заблокированные слоты с
+// сервера и подмешивает их в CLINIC/TREATMENTS "на лету" — если врач
+// поменял цену или адрес в кабинете, это сразу видно в приложении.
+async function loadClinicSettings() {
+  try {
+    const res = await fetch("/api/config");
+    const { settings, blockedSlots } = await res.json();
+
+    if (settings) {
+      if (settings.address) CLINIC.address = settings.address;
+      if (settings.phones) CLINIC.phones = settings.phones;
+      if (settings.hours) CLINIC.hours = settings.hours;
+      if (settings.lunch) CLINIC.lunch = settings.lunch;
+      if (settings.dayOff) CLINIC.dayOff = settings.dayOff;
+
+      (settings.treatments || []).forEach((st) => {
+        const t = TREATMENTS.find((x) => x.id === st.id);
+        if (t) {
+          t.priceFrom = st.priceFrom;
+          t.priceTo = st.priceTo;
+          t.free = !!st.free;
+        }
+      });
+    }
+
+    return blockedSlots || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Вход в кабинет врача по общему паролю. При успехе сервер запоминает
+// Telegram-аккаунт вошедшего, чтобы присылать ему уведомления о записях.
+async function adminLogin(password) {
+  try {
+    const res = await fetch("/api/admin-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, initData: tg?.initData || "" }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Неверный пароль" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети" };
+  }
+}
+
+// Закрыть/открыть слот времени у врача (сохраняется на сервере).
+async function adminToggleSlot(password, doctorId, date, time, action) {
+  try {
+    const res = await fetch("/api/admin-slots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, doctorId, date, time, action }),
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Сохранить отредактированные настройки клиники (адрес/телефоны/часы/цены).
+async function adminSaveSettings(password, settings) {
+  try {
+    const res = await fetch("/api/admin-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, settings }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Не удалось сохранить" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети" };
+  }
+}
+
+// Получить список предстоящих записей текущего пациента.
+async function fetchMyBookings() {
+  try {
+    const res = await fetch("/api/my-bookings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: tg?.initData || "" }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error, bookings: [] };
+    return { ok: true, bookings: data.bookings || [] };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети", bookings: [] };
+  }
+}
+
+// Отменить запись пациента.
+async function cancelMyBooking(bookingId) {
+  try {
+    const res = await fetch("/api/cancel-booking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: tg?.initData || "", bookingId }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Не удалось отменить запись" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети" };
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* HELPERS                                                              */
 /* ------------------------------------------------------------------ */
@@ -375,7 +485,11 @@ function HomeScreen({ navigate, appointment }) {
   return (
     <div className="flex-1 overflow-y-auto pb-4">
       <div className="flex items-center justify-between px-5 pt-5">
-        <button className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}>
+        <button
+          onClick={() => navigate("myBookings")}
+          className="w-9 h-9 rounded-full flex items-center justify-center"
+          style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}
+        >
           <Menu size={17} color={C.navy} />
         </button>
         <div className="flex items-center gap-2">
@@ -384,21 +498,7 @@ function HomeScreen({ navigate, appointment }) {
             Dr. Radjabov
           </span>
         </div>
-        <button className="w-9 h-9 rounded-full flex items-center justify-center relative" style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}>
-          <Bell size={16} color={C.navy} />
-        </button>
-      </div>
-
-      <div className="px-5 mt-4">
-        <div
-          className="flex items-center gap-2 px-4 py-3 rounded-2xl"
-          style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}
-        >
-          <Search size={16} color={C.textMuted} />
-          <span style={{ color: C.textMuted, fontSize: 13, fontFamily: "Inter, sans-serif" }}>
-            Поиск лечения, врача...
-          </span>
-        </div>
+        <div className="w-9 h-9" />
       </div>
 
       <div className="px-5 mt-4">
@@ -574,7 +674,7 @@ function TreatmentDetailScreen({ treatment, navigate }) {
   if (!treatment) return null;
   return (
     <div className="flex-1 overflow-y-auto flex flex-col">
-      <div className="p-5 pb-8 relative overflow-hidden" style={{ background: heroGradient }}>
+      <div className="p-5 pb-12 relative overflow-hidden" style={{ background: heroGradient }}>
         <div className="flex items-center justify-between">
           <button
             onClick={() => navigate("home")}
@@ -600,7 +700,7 @@ function TreatmentDetailScreen({ treatment, navigate }) {
         </div>
       </div>
 
-      <div className="px-5 -mt-5">
+      <div className="px-5 -mt-4">
         <div className="rounded-2xl p-4 flex items-center justify-around" style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}>
           <div className="flex flex-col items-center gap-1">
             <Clock size={15} color={C.cyanDark} />
@@ -1270,24 +1370,156 @@ function slotKey(doctorId, dateKey, time) {
 }
 
 /* ------------------------------------------------------------------ */
+/* MY BOOKINGS — список записей пациента с возможностью отмены        */
+/* ------------------------------------------------------------------ */
+
+function MyBookingsScreen({ navigate }) {
+  const [loading, setLoading] = useState(true);
+  const [bookings, setBookings] = useState([]);
+  const [error, setError] = useState("");
+  const [cancellingId, setCancellingId] = useState(null);
+
+  useEffect(() => {
+    fetchMyBookings().then((res) => {
+      setLoading(false);
+      if (!res.ok) setError(res.error || "Не удалось загрузить записи");
+      setBookings(res.bookings);
+    });
+  }, []);
+
+  async function handleCancel(id) {
+    setCancellingId(id);
+    const res = await cancelMyBooking(id);
+    setCancellingId(null);
+    if (res.ok) {
+      setBookings((prev) => prev.filter((b) => b.id !== id));
+    } else {
+      setError(res.error);
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto pb-4">
+      <ScreenHeader title="Мои записи" onBack={() => navigate("home")} />
+
+      {loading && (
+        <div className="px-5 pt-6 flex items-center justify-center">
+          <Loader2 size={20} color={C.cyanDark} className="animate-spin" />
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="px-5">
+          <p style={{ fontSize: 12.5, color: "#C23B3B", fontFamily: "Inter, sans-serif" }}>{error}</p>
+        </div>
+      )}
+
+      {!loading && !error && bookings.length === 0 && (
+        <div className="px-5 pt-6 text-center">
+          <p style={{ fontSize: 12.5, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
+            У вас пока нет предстоящих записей.
+          </p>
+        </div>
+      )}
+
+      <div className="px-5 flex flex-col gap-3 mt-2">
+        {bookings.map((b) => (
+          <div key={b.id} className="rounded-2xl p-4" style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}>
+            <p style={{ fontSize: 13.5, fontWeight: 700, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{b.service}</p>
+            {b.doctor && (
+              <p style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, fontFamily: "Inter, sans-serif" }}>Врач: {b.doctor}</p>
+            )}
+            <p style={{ fontSize: 12, color: C.cyanDark, fontWeight: 600, marginTop: 6, fontFamily: "Inter, sans-serif" }}>
+              {b.appointment_date} · {b.appointment_time}
+            </p>
+            <button
+              onClick={() => handleCancel(b.id)}
+              disabled={cancellingId === b.id}
+              className="mt-3 w-full py-2.5 rounded-full"
+              style={{ background: "rgba(220,60,60,0.08)", border: "1px solid rgba(220,60,60,0.35)", opacity: cancellingId === b.id ? 0.6 : 1 }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#C23B3B", fontFamily: "Inter, sans-serif" }}>
+                {cancellingId === b.id ? "Отменяем…" : "Отменить запись"}
+              </span>
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* DOCTOR LOGIN (демо: в реальном апе — авто-вход по telegram chat_id) */
 /* ------------------------------------------------------------------ */
 
 function DoctorLoginScreen({ navigate, onLogin }) {
+  const [password, setPassword] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [unlocked, setUnlocked] = useState(false);
+
+  async function handleUnlock() {
+    if (!password.trim()) return;
+    setChecking(true);
+    setError("");
+    const result = await adminLogin(password.trim());
+    setChecking(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setUnlocked(true);
+  }
+
+  if (!unlocked) {
+    return (
+      <div className="flex-1 overflow-y-auto pb-4">
+        <ScreenHeader title="Кабинет врача" onBack={() => navigate("profile")} />
+        <div className="px-5 mb-4">
+          <p style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.5, fontFamily: "Inter, sans-serif" }}>
+            Этот раздел только для сотрудников клиники. Введите пароль администратора.
+          </p>
+        </div>
+        <div className="px-5">
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
+            placeholder="Пароль"
+            type="password"
+            className="w-full px-4 py-3 rounded-2xl outline-none mb-3"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 14, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+          {error && <p style={{ fontSize: 12, color: "#C23B3B", marginBottom: 10, fontFamily: "Inter, sans-serif" }}>{error}</p>}
+          <button
+            onClick={handleUnlock}
+            disabled={checking}
+            className="w-full py-3 rounded-full"
+            style={{ background: btnGradient, opacity: checking ? 0.6 : 1 }}
+          >
+            <span style={{ color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "Inter, sans-serif" }}>
+              {checking ? "Проверяем…" : "Войти"}
+            </span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 overflow-y-auto pb-4">
       <ScreenHeader title="Кабинет врача" onBack={() => navigate("profile")} />
       <div className="px-5 mb-4">
         <p style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.5, fontFamily: "Inter, sans-serif" }}>
-          В реальном приложении вход происходит автоматически по вашему Telegram-аккаунту.
-          В этом демо-прототипе выберите себя из списка, чтобы посмотреть, как будет выглядеть кабинет.
+          Выберите себя из списка, чтобы открыть свой кабинет.
         </p>
       </div>
       <div className="px-5 flex flex-col gap-2.5">
         {DOCTORS.map((d) => (
           <button
             key={d.id}
-            onClick={() => onLogin(d)}
+            onClick={() => onLogin(d, password.trim())}
             className="rounded-2xl p-3.5 flex items-center gap-3"
             style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}
           >
@@ -1308,11 +1540,68 @@ function DoctorLoginScreen({ navigate, onLogin }) {
 /* DOCTOR PANEL — управление своим расписанием                        */
 /* ------------------------------------------------------------------ */
 
-function DoctorPanelScreen({ navigate, doctor, blockedSlots, onToggleSlot, onLogout, appointment }) {
+function DoctorPanelScreen({ navigate, doctor, blockedSlots, onToggleSlot, adminPassword, onLogout, appointment, onSettingsSaved }) {
   const days = getNextDays(6);
   const [activeDay, setActiveDay] = useState(days[0].key);
   const currentDay = days.find((d) => d.key === activeDay);
   const myAppointment = appointment && appointment.doctor?.id === doctor.id ? appointment : null;
+
+  const [tab, setTab] = useState("schedule"); // schedule | settings
+  const [form, setForm] = useState({
+    address: CLINIC.address,
+    phone1: CLINIC.phones[0] || "",
+    phone2: CLINIC.phones[1] || "",
+    hours: CLINIC.hours,
+    lunch: CLINIC.lunch,
+    dayOff: CLINIC.dayOff,
+    prices: TREATMENTS.reduce((acc, t) => ({ ...acc, [t.id]: { priceFrom: t.priceFrom, priceTo: t.priceTo } }), {}),
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  function updatePrice(id, field, value) {
+    setForm((f) => ({ ...f, prices: { ...f.prices, [id]: { ...f.prices[id], [field]: Number(value) || 0 } } }));
+    setSaved(false);
+  }
+
+  async function handleSaveSettings() {
+    setSaving(true);
+    setSaved(false);
+    const treatmentsPayload = TREATMENTS.map((t) => ({
+      id: t.id,
+      name: t.name,
+      priceFrom: form.prices[t.id]?.priceFrom ?? t.priceFrom,
+      priceTo: form.prices[t.id]?.priceTo ?? t.priceTo,
+      free: t.free,
+    }));
+    const settings = {
+      address: form.address,
+      phones: [form.phone1, form.phone2].filter(Boolean),
+      hours: form.hours,
+      lunch: form.lunch,
+      dayOff: form.dayOff,
+      treatments: treatmentsPayload,
+    };
+    const result = await adminSaveSettings(adminPassword, settings);
+    setSaving(false);
+    if (result.ok) {
+      // Применяем изменения сразу, без перезагрузки приложения
+      CLINIC.address = form.address;
+      CLINIC.phones = [form.phone1, form.phone2].filter(Boolean);
+      CLINIC.hours = form.hours;
+      CLINIC.lunch = form.lunch;
+      CLINIC.dayOff = form.dayOff;
+      treatmentsPayload.forEach((tp) => {
+        const t = TREATMENTS.find((x) => x.id === tp.id);
+        if (t) {
+          t.priceFrom = tp.priceFrom;
+          t.priceTo = tp.priceTo;
+        }
+      });
+      setSaved(true);
+      onSettingsSaved?.();
+    }
+  }
 
   return (
     <div className="flex-1 overflow-y-auto pb-4">
@@ -1329,71 +1618,175 @@ function DoctorPanelScreen({ navigate, doctor, blockedSlots, onToggleSlot, onLog
         </button>
       </div>
 
-      {myAppointment && (
-        <div className="px-5 mb-4">
-          <div className="rounded-2xl p-3.5" style={{ background: "rgba(47,196,217,0.1)" }}>
-            <p style={{ fontSize: 11, fontWeight: 700, color: C.cyanDark, marginBottom: 4, fontFamily: "Inter, sans-serif" }}>
-              Ближайшая запись к вам
+      <div className="px-5 flex gap-2 mb-4">
+        <button
+          onClick={() => setTab("schedule")}
+          className="flex-1 py-2 rounded-full"
+          style={{ background: tab === "schedule" ? btnGradient : C.cardWhite, border: `1px solid ${tab === "schedule" ? "transparent" : C.border}` }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 700, color: tab === "schedule" ? "#fff" : C.textDark, fontFamily: "Inter, sans-serif" }}>Расписание</span>
+        </button>
+        <button
+          onClick={() => setTab("settings")}
+          className="flex-1 py-2 rounded-full"
+          style={{ background: tab === "settings" ? btnGradient : C.cardWhite, border: `1px solid ${tab === "settings" ? "transparent" : C.border}` }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 700, color: tab === "settings" ? "#fff" : C.textDark, fontFamily: "Inter, sans-serif" }}>Настройки клиники</span>
+        </button>
+      </div>
+
+      {tab === "schedule" && (
+        <>
+          {myAppointment && (
+            <div className="px-5 mb-4">
+              <div className="rounded-2xl p-3.5" style={{ background: "rgba(47,196,217,0.1)" }}>
+                <p style={{ fontSize: 11, fontWeight: 700, color: C.cyanDark, marginBottom: 4, fontFamily: "Inter, sans-serif" }}>
+                  Ближайшая запись к вам
+                </p>
+                <p style={{ fontSize: 12.5, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{myAppointment.treatment.name}</p>
+                <p style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
+                  {myAppointment.date.weekday} {myAppointment.date.day} {myAppointment.date.month} · {myAppointment.time}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="px-5 mb-2">
+            <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>
+              Управление расписанием
             </p>
-            <p style={{ fontSize: 12.5, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{myAppointment.treatment.name}</p>
-            <p style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
-              {myAppointment.date.weekday} {myAppointment.date.day} {myAppointment.date.month} · {myAppointment.time}
+            <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 10, fontFamily: "Inter, sans-serif" }}>
+              Нажмите на время, чтобы закрыть или открыть слот для записи клиентов.
             </p>
           </div>
-        </div>
+
+          <div className="px-5 flex gap-2 mb-4 overflow-x-auto">
+            {days.map((d) => (
+              <button
+                key={d.key}
+                onClick={() => setActiveDay(d.key)}
+                className="flex flex-col items-center justify-center rounded-xl flex-shrink-0"
+                style={{
+                  width: 50,
+                  height: 58,
+                  background: activeDay === d.key ? btnGradient : C.cardWhite,
+                  border: `1px solid ${activeDay === d.key ? "transparent" : C.border}`,
+                }}
+              >
+                <span style={{ fontSize: 9.5, color: activeDay === d.key ? "#fff" : C.textMuted, fontFamily: "Inter, sans-serif" }}>{d.weekday}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: activeDay === d.key ? "#fff" : C.textDark, fontFamily: "Inter, sans-serif" }}>{d.day}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="px-5 grid grid-cols-3 gap-2">
+            {TIME_SLOTS.map((t) => {
+              const blocked = !!blockedSlots[slotKey(doctor.id, activeDay, t)];
+              return (
+                <button
+                  key={t}
+                  onClick={() => onToggleSlot(doctor.id, activeDay, t)}
+                  className="py-2.5 rounded-xl flex flex-col items-center"
+                  style={{
+                    background: blocked ? "rgba(220,60,60,0.08)" : "rgba(47,196,217,0.08)",
+                    border: `1px solid ${blocked ? "rgba(220,60,60,0.35)" : "rgba(47,196,217,0.35)"}`,
+                  }}
+                >
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: blocked ? "#C23B3B" : C.cyanDark, fontFamily: "Inter, sans-serif", textDecoration: blocked ? "line-through" : "none" }}>
+                    {t}
+                  </span>
+                  <span style={{ fontSize: 9, color: blocked ? "#C23B3B" : C.cyanDark, fontFamily: "Inter, sans-serif" }}>
+                    {blocked ? "закрыто" : "свободно"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
       )}
 
-      <div className="px-5 mb-2">
-        <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>
-          Управление расписанием
-        </p>
-        <p style={{ fontSize: 11, color: C.textMuted, marginBottom: 10, fontFamily: "Inter, sans-serif" }}>
-          Нажмите на время, чтобы закрыть или открыть слот для записи клиентов.
-        </p>
-      </div>
+      {tab === "settings" && (
+        <div className="px-5">
+          <p style={{ fontSize: 11.5, fontWeight: 700, color: C.textDark, marginBottom: 6, fontFamily: "Inter, sans-serif" }}>Адрес</p>
+          <input
+            value={form.address}
+            onChange={(e) => { setForm((f) => ({ ...f, address: e.target.value })); setSaved(false); }}
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-3"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
 
-      <div className="px-5 flex gap-2 mb-4 overflow-x-auto">
-        {days.map((d) => (
+          <p style={{ fontSize: 11.5, fontWeight: 700, color: C.textDark, marginBottom: 6, fontFamily: "Inter, sans-serif" }}>Телефоны</p>
+          <input
+            value={form.phone1}
+            onChange={(e) => { setForm((f) => ({ ...f, phone1: e.target.value })); setSaved(false); }}
+            placeholder="Телефон 1"
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-2"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+          <input
+            value={form.phone2}
+            onChange={(e) => { setForm((f) => ({ ...f, phone2: e.target.value })); setSaved(false); }}
+            placeholder="Телефон 2 (необязательно)"
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-3"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+
+          <p style={{ fontSize: 11.5, fontWeight: 700, color: C.textDark, marginBottom: 6, fontFamily: "Inter, sans-serif" }}>Часы работы</p>
+          <input
+            value={form.hours}
+            onChange={(e) => { setForm((f) => ({ ...f, hours: e.target.value })); setSaved(false); }}
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-2"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+          <input
+            value={form.lunch}
+            onChange={(e) => { setForm((f) => ({ ...f, lunch: e.target.value })); setSaved(false); }}
+            placeholder="Обед"
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-2"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+          <input
+            value={form.dayOff}
+            onChange={(e) => { setForm((f) => ({ ...f, dayOff: e.target.value })); setSaved(false); }}
+            placeholder="Выходной"
+            className="w-full px-3.5 py-2.5 rounded-xl outline-none mb-4"
+            style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+          />
+
+          <p style={{ fontSize: 11.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>Цены на услуги ($)</p>
+          {TREATMENTS.filter((t) => !t.free).map((t) => (
+            <div key={t.id} className="flex items-center gap-2 mb-2">
+              <span style={{ flex: 1, fontSize: 12, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{t.name}</span>
+              <input
+                type="number"
+                value={form.prices[t.id]?.priceFrom ?? t.priceFrom}
+                onChange={(e) => updatePrice(t.id, "priceFrom", e.target.value)}
+                className="px-2 py-1.5 rounded-lg outline-none"
+                style={{ width: 60, background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12, fontFamily: "Inter, sans-serif", color: C.textDark }}
+              />
+              <span style={{ fontSize: 12, color: C.textMuted }}>–</span>
+              <input
+                type="number"
+                value={form.prices[t.id]?.priceTo ?? t.priceTo}
+                onChange={(e) => updatePrice(t.id, "priceTo", e.target.value)}
+                className="px-2 py-1.5 rounded-lg outline-none"
+                style={{ width: 60, background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 12, fontFamily: "Inter, sans-serif", color: C.textDark }}
+              />
+            </div>
+          ))}
+
           <button
-            key={d.key}
-            onClick={() => setActiveDay(d.key)}
-            className="flex flex-col items-center justify-center rounded-xl flex-shrink-0"
-            style={{
-              width: 50,
-              height: 58,
-              background: activeDay === d.key ? btnGradient : C.cardWhite,
-              border: `1px solid ${activeDay === d.key ? "transparent" : C.border}`,
-            }}
+            onClick={handleSaveSettings}
+            disabled={saving}
+            className="w-full py-3 rounded-full mt-3"
+            style={{ background: btnGradient, opacity: saving ? 0.6 : 1 }}
           >
-            <span style={{ fontSize: 9.5, color: activeDay === d.key ? "#fff" : C.textMuted, fontFamily: "Inter, sans-serif" }}>{d.weekday}</span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: activeDay === d.key ? "#fff" : C.textDark, fontFamily: "Inter, sans-serif" }}>{d.day}</span>
+            <span style={{ color: "#fff", fontWeight: 700, fontSize: 13.5, fontFamily: "Inter, sans-serif" }}>
+              {saving ? "Сохраняем…" : saved ? "Сохранено ✓" : "Сохранить изменения"}
+            </span>
           </button>
-        ))}
-      </div>
-
-      <div className="px-5 grid grid-cols-3 gap-2">
-        {TIME_SLOTS.map((t) => {
-          const blocked = !!blockedSlots[slotKey(doctor.id, activeDay, t)];
-          return (
-            <button
-              key={t}
-              onClick={() => onToggleSlot(doctor.id, activeDay, t)}
-              className="py-2.5 rounded-xl flex flex-col items-center"
-              style={{
-                background: blocked ? "rgba(220,60,60,0.08)" : "rgba(47,196,217,0.08)",
-                border: `1px solid ${blocked ? "rgba(220,60,60,0.35)" : "rgba(47,196,217,0.35)"}`,
-              }}
-            >
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: blocked ? "#C23B3B" : C.cyanDark, fontFamily: "Inter, sans-serif", textDecoration: blocked ? "line-through" : "none" }}>
-                {t}
-              </span>
-              <span style={{ fontSize: 9, color: blocked ? "#C23B3B" : C.cyanDark, fontFamily: "Inter, sans-serif" }}>
-                {blocked ? "закрыто" : "свободно"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1409,12 +1802,18 @@ export default function App() {
   const [appointment, setAppointment] = useState(null);
   const [blockedSlots, setBlockedSlots] = useState({});
   const [loggedDoctor, setLoggedDoctor] = useState(null);
+  const [adminPassword, setAdminPassword] = useState(null); // хранится только в памяти сессии
+  const [configVersion, setConfigVersion] = useState(0);
 
   useEffect(() => {
     if (tg) {
       tg.ready();
       tg.expand();
     }
+    loadClinicSettings().then((fetchedBlockedSlots) => {
+      setBlockedSlots(fetchedBlockedSlots);
+      setConfigVersion((v) => v + 1); // перерисовать экраны с новыми ценами/адресом
+    });
   }, []);
 
   function navigate(target, opts = {}) {
@@ -1431,12 +1830,15 @@ export default function App() {
 
   function toggleSlot(doctorId, dateKey, time) {
     const key = slotKey(doctorId, dateKey, time);
+    const isCurrentlyBlocked = !!blockedSlots[key];
     setBlockedSlots((prev) => {
       const next = { ...prev };
       if (next[key]) delete next[key];
       else next[key] = true;
       return next;
     });
+    // Сохраняем изменение на сервере, чтобы оно не потерялось при перезаходе
+    adminToggleSlot(adminPassword, doctorId, dateKey, time, isCurrentlyBlocked ? "unblock" : "block");
   }
 
   let body;
@@ -1461,11 +1863,13 @@ export default function App() {
     body = <AssistantScreen navigate={navigate} onBookAppointment={handleBookAppointment} blockedSlots={blockedSlots} />;
   else if (screen === "profile")
     body = <ProfileScreen navigate={navigate} appointment={appointment} loggedDoctor={loggedDoctor} />;
+  else if (screen === "myBookings") body = <MyBookingsScreen navigate={navigate} />;
   else if (screen === "doctorLogin")
     body = (
       <DoctorLoginScreen
         navigate={navigate}
-        onLogin={(d) => {
+        onLogin={(d, password) => {
+          setAdminPassword(password);
           setLoggedDoctor(d);
           setScreen("doctorPanel");
         }}
@@ -1478,11 +1882,14 @@ export default function App() {
         doctor={loggedDoctor}
         blockedSlots={blockedSlots}
         onToggleSlot={toggleSlot}
+        adminPassword={adminPassword}
         onLogout={() => {
           setLoggedDoctor(null);
+          setAdminPassword(null);
           setScreen("profile");
         }}
         appointment={appointment}
+        onSettingsSaved={() => setConfigVersion((v) => v + 1)}
       />
     );
 
@@ -1500,7 +1907,7 @@ export default function App() {
           border: "1px solid rgba(255,255,255,0.5)",
         }}
       >
-        {body}
+        <div key={configVersion}>{body}</div>
         {["home", "doctors", "assistant", "profile"].includes(screen) && <BottomNav screen={screen} navigate={navigate} />}
       </div>
     </div>
