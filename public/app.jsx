@@ -364,7 +364,15 @@ function getNextDays(count = 5) {
   return days;
 }
 
-const TIME_SLOTS = ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00"];
+// Слоты через каждые 30 минут (рабочее время 9:00–18:00, без обеда 12:00–14:00).
+// Записать на произвольную минуту (например 16:40) нельзя — время привязано
+// к слотам, потому что именно по слотам врач закрывает/открывает часы в
+// своём кабинете. Если сделать свободный ввод времени, эта функция управления
+// расписанием перестанет работать корректно.
+const TIME_SLOTS = [
+  "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
+  "14:00", "14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30",
+];
 
 function guessTreatment(text) {
   const lower = (text || "").toLowerCase();
@@ -674,7 +682,7 @@ function TreatmentDetailScreen({ treatment, navigate }) {
   if (!treatment) return null;
   return (
     <div className="flex-1 overflow-y-auto flex flex-col">
-      <div className="p-5 pb-12 relative overflow-hidden" style={{ background: heroGradient }}>
+      <div className="p-5 pb-8 relative overflow-hidden" style={{ background: heroGradient, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 }}>
         <div className="flex items-center justify-between">
           <button
             onClick={() => navigate("home")}
@@ -700,7 +708,7 @@ function TreatmentDetailScreen({ treatment, navigate }) {
         </div>
       </div>
 
-      <div className="px-5 -mt-4">
+      <div className="px-5 mt-4">
         <div className="rounded-2xl p-4 flex items-center justify-around" style={{ background: C.cardWhite, border: `1px solid ${C.border}` }}>
           <div className="flex flex-col items-center gap-1">
             <Clock size={15} color={C.cyanDark} />
@@ -1077,6 +1085,37 @@ function AssistantScreen({ navigate, onBookAppointment, blockedSlots }) {
         "Здравствуйте! Я — AI-ассистент клиники Dr. Radjabov 🦷 Расскажите, что вас беспокоит, и я подскажу подходящее лечение, цену и запишу на приём.",
     },
   ]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  // При открытии чата подгружаем сохранённую историю переписки из
+  // облачного хранилища Telegram (привязана к аккаунту пациента,
+  // сохраняется между сессиями и устройствами).
+  useEffect(() => {
+    if (tg?.CloudStorage) {
+      tg.CloudStorage.getItem("chat_history", (err, value) => {
+        if (!err && value) {
+          try {
+            const saved = JSON.parse(value);
+            if (Array.isArray(saved) && saved.length > 0) setMessages(saved);
+          } catch (e) {
+            // повреждённые данные — просто начинаем с чистого чата
+          }
+        }
+        setHistoryLoaded(true);
+      });
+    } else {
+      setHistoryLoaded(true);
+    }
+  }, []);
+
+  // Сохраняем историю при каждом новом сообщении (после первой загрузки,
+  // чтобы не перезаписать сохранённую историю пустым стартовым чатом).
+  useEffect(() => {
+    if (historyLoaded && tg?.CloudStorage) {
+      tg.CloudStorage.setItem("chat_history", JSON.stringify(messages.slice(-30)));
+    }
+  }, [messages, historyLoaded]);
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [bookingStep, setBookingStep] = useState(null); // null|doctor|date|time|confirm|done
@@ -1087,7 +1126,13 @@ function AssistantScreen({ navigate, onBookAppointment, blockedSlots }) {
   const scrollRef = useRef(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    // requestAnimationFrame гарантирует, что новые элементы (кнопки выбора
+    // врача/даты/времени) уже отрисовались в DOM, прежде чем скроллить —
+    // без этого на некоторых устройствах чат "как будто зависает",
+    // потому что скроллится до того, как новая высота посчиталась.
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "auto" });
+    });
   }, [messages, loading, bookingStep]);
 
   function addAssistantMsg(text) {
@@ -1458,6 +1503,29 @@ function DoctorLoginScreen({ navigate, onLogin }) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  const [checkingStoredPassword, setCheckingStoredPassword] = useState(true);
+
+  // Если пароль уже сохранён с прошлого раза (в облачном хранилище
+  // Telegram) — проверяем его на сервере и, если он всё ещё верный,
+  // сразу открываем список врачей без повторного ввода пароля.
+  useEffect(() => {
+    if (tg?.CloudStorage) {
+      tg.CloudStorage.getItem("admin_password", async (err, stored) => {
+        if (!err && stored) {
+          const result = await adminLogin(stored);
+          if (result.ok) {
+            setPassword(stored);
+            setUnlocked(true);
+          } else {
+            tg.CloudStorage.removeItem("admin_password");
+          }
+        }
+        setCheckingStoredPassword(false);
+      });
+    } else {
+      setCheckingStoredPassword(false);
+    }
+  }, []);
 
   async function handleUnlock() {
     if (!password.trim()) return;
@@ -1469,7 +1537,21 @@ function DoctorLoginScreen({ navigate, onLogin }) {
       setError(result.error);
       return;
     }
+    // Запоминаем пароль на устройстве пациента/врача через Telegram,
+    // чтобы в следующий раз не спрашивать его снова.
+    tg?.CloudStorage?.setItem("admin_password", password.trim());
     setUnlocked(true);
+  }
+
+  if (checkingStoredPassword) {
+    return (
+      <div className="flex-1 overflow-y-auto pb-4">
+        <ScreenHeader title="Кабинет врача" onBack={() => navigate("profile")} />
+        <div className="px-5 pt-6 flex items-center justify-center">
+          <Loader2 size={20} color={C.cyanDark} className="animate-spin" />
+        </div>
+      </div>
+    );
   }
 
   if (!unlocked) {
@@ -1886,6 +1968,7 @@ export default function App() {
         onLogout={() => {
           setLoggedDoctor(null);
           setAdminPassword(null);
+          tg?.CloudStorage?.removeItem("admin_password");
           setScreen("profile");
         }}
         appointment={appointment}
