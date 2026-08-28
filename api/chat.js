@@ -36,7 +36,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const { messages } = req.body; // messages: [{role: "user"|"assistant", content: "..."}]
+    const { messages, lang } = req.body; // messages: [{role: "user"|"assistant", content: "..."}]
 
     if (!Array.isArray(messages) || messages.length === 0) {
       res.status(400).json({ error: "messages is required" });
@@ -44,7 +44,7 @@ module.exports = async (req, res) => {
     }
 
     const cfg = await getSettings();
-    const systemPrompt = defaultConfig.systemPromptTemplate(cfg);
+    const systemPrompt = defaultConfig.systemPromptTemplate(cfg, lang);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
