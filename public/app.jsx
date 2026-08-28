@@ -197,6 +197,51 @@ const TREATMENTS = [
     descUz: "Emalga zarar keltirmasdan bir tashrifda tishlarni 6–8 tongacha professional oqartirish.",
     keywords: ["отбел", "белые зубы", "жёлтые зубы"],
   },
+  {
+    id: "prosthesis_acrylic",
+    name: "Протез (Акрил)",
+    nameUz: "Protez (Akril)",
+    emoji: "🧩",
+    priceFrom: 200,
+    priceTo: 200,
+    duration: "2–3 визита",
+    durationUz: "2–3 tashrif",
+    tagline: "Бюджетный вариант",
+    taglineUz: "Arzon variant",
+    desc: "Акриловый протез — доступное решение для восстановления зубного ряда, лёгкий и простой в уходе.",
+    descUz: "Akril protez — tish qatorini tiklash uchun arzon yechim, yengil va parvarish qilish oson.",
+    keywords: ["протез", "акрил", "вставные зубы", "съемный протез"],
+  },
+  {
+    id: "prosthesis_tekristal",
+    name: "Протез (Текристал)",
+    nameUz: "Protez (Tekristal)",
+    emoji: "💎",
+    priceFrom: 350,
+    priceTo: 350,
+    duration: "2–3 визита",
+    durationUz: "2–3 tashrif",
+    tagline: "Прочный и эстетичный",
+    taglineUz: "Mustahkam va estetik",
+    desc: "Протез Текристал — прочный и эстетичный материал, повышенный комфорт при ношении.",
+    descUz: "Tekristal protez — mustahkamroq va estetik material, kiyishda yuqori qulaylik.",
+    keywords: ["протез", "текристал", "вставные зубы"],
+  },
+  {
+    id: "prosthesis_vacuum",
+    name: "Протез (Вакуум)",
+    nameUz: "Protez (Vakuum)",
+    emoji: "🦾",
+    priceFrom: 500,
+    priceTo: 500,
+    duration: "2–3 визита",
+    durationUz: "2–3 tashrif",
+    tagline: "Премиум комфорт",
+    taglineUz: "Premium qulaylik",
+    desc: "Вакуумный протез — самый комфортный и плотно прилегающий вариант, минимальная адаптация.",
+    descUz: "Vakuum protez — eng qulay va zich yopishadigan variant, moslashish minimal.",
+    keywords: ["протез", "вакуум", "вставные зубы", "премиум"],
+  },
 ];
 
 const DOCTORS = [
@@ -350,7 +395,12 @@ const STRINGS = {
     panelLogout: "Выйти",
     panelTabSchedule: "Расписание",
     panelTabSettings: "Настройки клиники",
-    panelUpcoming: "Ближайшая запись к вам",
+    panelUpcoming: "Ваши предстоящие записи",
+    panelNoBookings: "Пока нет предстоящих записей",
+    panelCancelBooking: "Отменить запись",
+    panelCancelling: "Отменяем…",
+    panelPatientLabel: "Пациент",
+    panelPhoneLabel: "Телефон",
     panelScheduleHint: "Нажмите на время, чтобы закрыть или открыть слот для записи клиентов.",
     panelSlotClosed: "закрыто",
     panelSlotFree: "свободно",
@@ -463,7 +513,12 @@ const STRINGS = {
     panelLogout: "Chiqish",
     panelTabSchedule: "Jadval",
     panelTabSettings: "Klinika sozlamalari",
-    panelUpcoming: "Sizga yaqin yozuv",
+    panelUpcoming: "Sizning kelayotgan yozuvlaringiz",
+    panelNoBookings: "Hozircha kelayotgan yozuvlar yo'q",
+    panelCancelBooking: "Yozuvni bekor qilish",
+    panelCancelling: "Bekor qilinmoqda…",
+    panelPatientLabel: "Bemor",
+    panelPhoneLabel: "Telefon",
     panelScheduleHint: "Mijozlar yozilishi uchun vaqtni yopish yoki ochish uchun uni bosing.",
     panelSlotClosed: "yopiq",
     panelSlotFree: "bo'sh",
@@ -516,6 +571,7 @@ async function submitBookingToServer({ treatment, doctor, date, time, phone, nam
         phone,
         service: treatment?.name || "",
         doctor: doctor?.name || "",
+        doctorId: doctor?.id || "",
         date: date?.key || "",
         time: time || "",
       }),
@@ -600,6 +656,38 @@ async function adminSaveSettings(password, settings) {
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data.error || "Не удалось сохранить" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети" };
+  }
+}
+
+// Получить список предстоящих записей конкретного врача (для кабинета врача).
+async function fetchDoctorBookings(password, doctorId) {
+  try {
+    const res = await fetch("/api/doctor-bookings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, doctorId }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error, bookings: [] };
+    return { ok: true, bookings: data.bookings || [] };
+  } catch (e) {
+    return { ok: false, error: "Ошибка сети", bookings: [] };
+  }
+}
+
+// Врач отменяет запись пациента — пациенту придёт уведомление в Telegram.
+async function doctorCancelBooking(password, bookingId) {
+  try {
+    const res = await fetch("/api/doctor-cancel-booking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, bookingId }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Не удалось отменить запись" };
     return { ok: true };
   } catch (e) {
     return { ok: false, error: "Ошибка сети" };
@@ -2072,7 +2160,26 @@ function DoctorPanelScreen({ navigate, doctor, blockedSlots, onToggleSlot, admin
   const days = getNextDays(6);
   const [activeDay, setActiveDay] = useState(days[0].key);
   const currentDay = days.find((d) => d.key === activeDay);
-  const myAppointment = appointment && appointment.doctor?.id === doctor.id ? appointment : null;
+
+  const [myBookings, setMyBookings] = useState([]);
+  const [bookingsLoading, setBookingsLoading] = useState(true);
+  const [cancellingId, setCancellingId] = useState(null);
+
+  useEffect(() => {
+    fetchDoctorBookings(adminPassword, doctor.id).then((res) => {
+      setBookingsLoading(false);
+      if (res.ok) setMyBookings(res.bookings);
+    });
+  }, []);
+
+  async function handleCancelBooking(bookingId) {
+    setCancellingId(bookingId);
+    const res = await doctorCancelBooking(adminPassword, bookingId);
+    setCancellingId(null);
+    if (res.ok) {
+      setMyBookings((prev) => prev.filter((b) => b.id !== bookingId));
+    }
+  }
 
   const [tab, setTab] = useState("schedule"); // schedule | settings
   const [form, setForm] = useState({
@@ -2165,19 +2272,50 @@ function DoctorPanelScreen({ navigate, doctor, blockedSlots, onToggleSlot, admin
 
       {tab === "schedule" && (
         <>
-          {myAppointment && (
-            <div className="px-5 mb-4">
-              <div className="rounded-2xl p-3.5" style={{ background: "rgba(47,196,217,0.1)" }}>
-                <p style={{ fontSize: 11, fontWeight: 700, color: C.cyanDark, marginBottom: 4, fontFamily: "Inter, sans-serif" }}>
-                  {S("panelUpcoming")}
-                </p>
-                <p style={{ fontSize: 12.5, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{L(myAppointment.treatment, "name")}</p>
-                <p style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
-                  {myAppointment.date.weekday} {myAppointment.date.day} {myAppointment.date.month} · {myAppointment.time}
-                </p>
+          <div className="px-5 mb-4">
+            <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>
+              {S("panelUpcoming")}
+            </p>
+
+            {bookingsLoading && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 size={18} color={C.cyanDark} className="animate-spin" />
               </div>
+            )}
+
+            {!bookingsLoading && myBookings.length === 0 && (
+              <p style={{ fontSize: 11.5, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
+                {S("panelNoBookings")}
+              </p>
+            )}
+
+            <div className="flex flex-col gap-2">
+              {myBookings.map((b) => (
+                <div key={b.id} className="rounded-2xl p-3.5" style={{ background: "rgba(47,196,217,0.1)" }}>
+                  <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, fontFamily: "Inter, sans-serif" }}>{b.service}</p>
+                  <p style={{ fontSize: 11.5, color: C.cyanDark, fontWeight: 600, marginTop: 2, fontFamily: "Inter, sans-serif" }}>
+                    {b.appointment_date} · {b.appointment_time}
+                  </p>
+                  <p style={{ fontSize: 11, color: C.textMuted, marginTop: 4, fontFamily: "Inter, sans-serif" }}>
+                    {S("panelPatientLabel")}: {b.name}
+                  </p>
+                  <p style={{ fontSize: 11, color: C.textMuted, fontFamily: "Inter, sans-serif" }}>
+                    {S("panelPhoneLabel")}: {b.phone}
+                  </p>
+                  <button
+                    onClick={() => handleCancelBooking(b.id)}
+                    disabled={cancellingId === b.id}
+                    className="mt-2.5 w-full py-2 rounded-full"
+                    style={{ background: "rgba(220,60,60,0.08)", border: "1px solid rgba(220,60,60,0.35)", opacity: cancellingId === b.id ? 0.6 : 1 }}
+                  >
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: "#C23B3B", fontFamily: "Inter, sans-serif" }}>
+                      {cancellingId === b.id ? S("panelCancelling") : S("panelCancelBooking")}
+                    </span>
+                  </button>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
 
           <div className="px-5 mb-2">
             <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>

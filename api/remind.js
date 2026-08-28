@@ -61,7 +61,10 @@ module.exports = async (req, res) => {
     let sentCount = 0;
 
     for (const booking of bookings || []) {
-      const appointmentDateTime = new Date(`${booking.appointment_date}T${booking.appointment_time}:00`);
+      // Указываем часовой пояс Узбекистана (+05:00) явно — иначе Node на
+      // сервере (обычно работает по UTC) неправильно посчитает время приёма,
+      // и напоминания будут приходить на несколько часов раньше или позже.
+      const appointmentDateTime = new Date(`${booking.appointment_date}T${booking.appointment_time}:00+05:00`);
 
       // Напоминаем, если приём попадает в окно (now .. windowEnd) и ещё не прошёл
       if (appointmentDateTime > now && appointmentDateTime <= windowEnd) {

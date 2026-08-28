@@ -47,3 +47,59 @@ create table if not exists staff_telegram (
   name text,
   added_at timestamptz default now()
 );
+
+-- === Обновление: защита от двойной записи на один и тот же слот ===
+-- Добавляем doctor_id (техническое имя врача d1/d2/d3), чтобы можно было
+-- сверять занятость слота так же, как это делает форма записи.
+alter table bookings add column if not exists doctor_id text;
+
+-- Гарантирует на уровне самой базы данных, что два пациента не смогут
+-- одновременно занять одного и того же врача на одно и то же время —
+-- даже если оба запроса пришли в один и тот же момент.
+create unique index if not exists idx_unique_active_booking
+  on bookings (doctor_id, appointment_date, appointment_time)
+  where status = 'confirmed';
+
+-- === Обновление: защита пароля врача от подбора ===
+-- Считает неудачные попытки входа по Telegram-аккаунту, чтобы можно
+-- было временно заблокировать после нескольких подряд неверных паролей.
+create table if not exists admin_login_attempts (
+  id bigint generated always as identity primary key,
+  telegram_user_id bigint not null,
+  attempted_at timestamptz default now()
+);
+
+create index if not exists idx_login_attempts_lookup
+  on admin_login_attempts (telegram_user_id, attempted_at);
+
+-- === Обновление: ограничение по количеству кресел в клинике ===
+-- В клинике физически только 2 кресла — значит, в одно и то же время
+-- (независимо от того, к какому врачу) может принимать не больше
+-- 2 пациентов одновременно, даже если свободен третий врач.
+-- Если у клиники появится третье кресло — поменяйте число 2 в строке
+-- "if current_count >= 2" ниже на нужное количество и запустите
+-- этот блок ещё раз.
+create or replace function check_chair_capacity() returns trigger as $$
+declare
+  current_count int;
+begin
+  select count(*) into current_count
+  from bookings
+  where appointment_date = new.appointment_date
+    and appointment_time = new.appointment_time
+    and status = 'confirmed';
+
+  if current_count >= 2 then
+    raise exception 'CHAIR_CAPACITY_FULL';
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_check_chair_capacity on bookings;
+create trigger trg_check_chair_capacity
+  before insert on bookings
+  for each row
+  when (new.status = 'confirmed')
+  execute function check_chair_capacity();

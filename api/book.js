@@ -2,6 +2,11 @@
 // /api/book — принимает данные формы записи, проверяет, что запрос
 // реально пришёл из Telegram (initData), сохраняет запись в Supabase
 // и сразу отправляет пациенту подтверждение в Telegram.
+//
+// Защита от двойной записи: в базе стоит уникальный индекс на
+// (doctor_id, дата, время) среди подтверждённых записей — если два
+// пациента одновременно попробуют занять один и тот же слот, второй
+// запрос будет отклонён базой данных, и мы вернём понятную ошибку.
 // =====================================================================
 
 const { createClient } = require("@supabase/supabase-js");
@@ -16,7 +21,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const { initData, name, phone, service, doctor: doctorPreference, date, time } = req.body;
+    const { initData, name, phone, service, doctor: doctorPreference, doctorId, date, time } = req.body;
 
     if (!initData || !name || !phone || !service || !date || !time) {
       res.status(400).json({ error: "Заполнены не все поля" });
@@ -38,6 +43,7 @@ module.exports = async (req, res) => {
         phone,
         service,
         doctor: doctorPreference || null,
+        doctor_id: doctorId || null,
         appointment_date: date, // формат YYYY-MM-DD
         appointment_time: time, // формат HH:MM
         reminder_sent: false,
@@ -47,6 +53,19 @@ module.exports = async (req, res) => {
       .single();
 
     if (error) {
+      // Код 23505 — нарушение уникального индекса: этот врач уже занят
+      // именно на это время (кто-то успел записаться буквально только что).
+      if (error.code === "23505") {
+        res.status(409).json({ error: "Это время только что заняли. Пожалуйста, выберите другое время." });
+        return;
+      }
+      // Ограничение по количеству кресел — на это время уже записаны
+      // все пациенты, сколько клиника может принять одновременно,
+      // даже если конкретно этот врач ещё свободен.
+      if (error.message && error.message.includes("CHAIR_CAPACITY_FULL")) {
+        res.status(409).json({ error: "На это время уже заняты все места в клинике. Пожалуйста, выберите другое время." });
+        return;
+      }
       console.error("Supabase insert error:", error);
       res.status(500).json({ error: "Не удалось сохранить запись" });
       return;
