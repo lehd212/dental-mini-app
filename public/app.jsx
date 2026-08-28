@@ -294,6 +294,9 @@ const STRINGS = {
     bookingVisitCard: "Визит в клинику",
     bookingPhoneLabel: "Ваш телефон",
     bookingPhonePlaceholder: "+998 90 123 45 67",
+    bookingPhoneInvalid: "Проверьте номер телефона — похоже, он неполный",
+    bookingNameLabel: "Ваше имя",
+    bookingNamePlaceholder: "Как к вам обращаться",
     bookingCost: "Стоимость",
     bookingConfirmBtn: "Подтвердить запись",
     bookingSubmitting: "Записываем…",
@@ -332,6 +335,7 @@ const STRINGS = {
     assistantConfirmBtn: "Подтвердить запись",
     assistantDone: (d) => `Готово! Запись подтверждена ✅ Ждём вас ${d.weekday} ${d.day} ${d.month} в ${d.time}. Подтверждение пришло вам в Telegram. Хорошего дня!`,
     assistantPhoneRequired: "Впишите номер телефона для связи",
+    assistantNameRequired: "Впишите ваше имя",
     assistantConnError: "Извините, произошла ошибка соединения. Но я всё равно могу помочь с записью на приём 👇",
     assistantBookingTo: (name) => `Записываю к ${name}. Выберите удобный день:`,
 
@@ -403,6 +407,9 @@ const STRINGS = {
     bookingVisitCard: "Klinikaga tashrif",
     bookingPhoneLabel: "Telefon raqamingiz",
     bookingPhonePlaceholder: "+998 90 123 45 67",
+    bookingPhoneInvalid: "Telefon raqamini tekshiring — u to'liq emasga o'xshaydi",
+    bookingNameLabel: "Ismingiz",
+    bookingNamePlaceholder: "Sizga qanday murojaat qilsak bo'ladi",
     bookingCost: "Narxi",
     bookingConfirmBtn: "Yozilishni tasdiqlash",
     bookingSubmitting: "Yozilmoqda…",
@@ -441,6 +448,7 @@ const STRINGS = {
     assistantConfirmBtn: "Yozilishni tasdiqlash",
     assistantDone: (d) => `Tayyor! Yozuv tasdiqlandi ✅ Sizni ${d.weekday}, ${d.day} ${d.month} kuni soat ${d.time} da kutamiz. Tasdiqlash Telegram'ga keldi. Yaxshi kun tilaymiz!`,
     assistantPhoneRequired: "Bog'lanish uchun telefon raqamini kiriting",
+    assistantNameRequired: "Ismingizni kiriting",
     assistantConnError: "Kechirasiz, ulanishda xatolik yuz berdi. Lekin men baribir qabulga yozilishda yordam bera olaman 👇",
     assistantBookingTo: (name) => `${name} ga yozmoqdaman. Qulay kunni tanlang:`,
 
@@ -485,11 +493,18 @@ function getTelegramUser() {
   return tg?.initDataUnsafe?.user || null;
 }
 
+// Проверяет, похож ли ввод на настоящий номер телефона —
+// минимум 9 цифр (без учёта пробелов, скобок, +, тире).
+function isValidPhone(phone) {
+  const digitsOnly = (phone || "").replace(/\D/g, "");
+  return digitsOnly.length >= 9;
+}
+
 // Отправляет реальную запись на сервер: сохраняет в базу и присылает
 // пациенту подтверждение прямо в Telegram. Возвращает { ok, error }.
-async function submitBookingToServer({ treatment, doctor, date, time, phone }) {
+async function submitBookingToServer({ treatment, doctor, date, time, phone, name }) {
   const user = getTelegramUser();
-  const name = user ? [user.first_name, user.last_name].filter(Boolean).join(" ") : "Пациент";
+  const finalName = (name || "").trim() || (user ? [user.first_name, user.last_name].filter(Boolean).join(" ") : "Пациент");
 
   try {
     const res = await fetch("/api/book", {
@@ -497,7 +512,7 @@ async function submitBookingToServer({ treatment, doctor, date, time, phone }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         initData: tg?.initData || "",
-        name,
+        name: finalName,
         phone,
         service: treatment?.name || "",
         doctor: doctor?.name || "",
@@ -1161,6 +1176,10 @@ function BookingScreen({ navigate, treatment, doctor, blockedSlots, onConfirm })
   const [selDoctor, setSelDoctor] = useState(doctor || null);
   const [selDate, setSelDate] = useState(null);
   const [selTime, setSelTime] = useState(null);
+  const [name, setName] = useState(() => {
+    const u = getTelegramUser();
+    return u ? [u.first_name, u.last_name].filter(Boolean).join(" ") : "";
+  });
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -1170,12 +1189,16 @@ function BookingScreen({ navigate, treatment, doctor, blockedSlots, onConfirm })
     (t) => !selDoctor || !selDate || !blockedSlots?.[slotKey(selDoctor.id, selDate.key, t)]
   );
 
-  const canConfirm = selDoctor && selDate && selTime && phone.trim();
+  const canConfirm = selDoctor && selDate && selTime && name.trim() && isValidPhone(phone);
 
   async function handleConfirmClick() {
+    if (!isValidPhone(phone)) {
+      setSubmitError(S("bookingPhoneInvalid"));
+      return;
+    }
     setSubmitting(true);
     setSubmitError("");
-    const result = await submitBookingToServer({ treatment: activeTreatment, doctor: selDoctor, date: selDate, time: selTime, phone });
+    const result = await submitBookingToServer({ treatment: activeTreatment, doctor: selDoctor, date: selDate, time: selTime, phone, name });
     setSubmitting(false);
     if (!result.ok) {
       setSubmitError(result.error);
@@ -1292,6 +1315,18 @@ function BookingScreen({ navigate, treatment, doctor, blockedSlots, onConfirm })
           onChange={(e) => setPhone(e.target.value)}
           placeholder={S("bookingPhonePlaceholder")}
           type="tel"
+          className="w-full px-4 py-3 rounded-2xl outline-none mb-4"
+          style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 13, fontFamily: "Inter, sans-serif", color: C.textDark }}
+        />
+
+        <p style={{ fontSize: 12.5, fontWeight: 700, color: C.textDark, marginBottom: 8, fontFamily: "Inter, sans-serif" }}>
+          {S("bookingNameLabel")}
+        </p>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={S("bookingNamePlaceholder")}
+          type="text"
           className="w-full px-4 py-3 rounded-2xl outline-none mb-4"
           style={{ background: C.cardWhite, border: `1px solid ${C.border}`, fontSize: 13, fontFamily: "Inter, sans-serif", color: C.textDark }}
         />
@@ -1513,6 +1548,10 @@ function AssistantScreen({ navigate, onBookAppointment, blockedSlots }) {
   const [loading, setLoading] = useState(false);
   const [bookingStep, setBookingStep] = useState(null); // null|doctor|date|time|confirm|done
   const [draft, setDraft] = useState({ doctor: null, date: null, time: null });
+  const [name, setName] = useState(() => {
+    const u = getTelegramUser();
+    return u ? [u.first_name, u.last_name].filter(Boolean).join(" ") : "";
+  });
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -1588,14 +1627,18 @@ function AssistantScreen({ navigate, onBookAppointment, blockedSlots }) {
   }
 
   async function confirmBooking() {
-    if (!phone.trim()) {
-      setSubmitError(S("assistantPhoneRequired"));
+    if (!isValidPhone(phone)) {
+      setSubmitError(S("bookingPhoneInvalid"));
+      return;
+    }
+    if (!name.trim()) {
+      setSubmitError(S("assistantNameRequired"));
       return;
     }
     setSubmitting(true);
     setSubmitError("");
     const treatment = guessTreatmentFromMessages(messages);
-    const result = await submitBookingToServer({ treatment, doctor: draft.doctor, date: draft.date, time: draft.time, phone });
+    const result = await submitBookingToServer({ treatment, doctor: draft.doctor, date: draft.date, time: draft.time, phone, name });
     setSubmitting(false);
     if (!result.ok) {
       setSubmitError(result.error);
@@ -1737,6 +1780,14 @@ function AssistantScreen({ navigate, onBookAppointment, blockedSlots }) {
               onChange={(e) => setPhone(e.target.value)}
               placeholder={S("assistantPhonePlaceholder")}
               type="tel"
+              className="w-full px-3.5 py-2.5 rounded-full outline-none mb-2"
+              style={{ background: C.bg, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
+            />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={S("bookingNamePlaceholder")}
+              type="text"
               className="w-full px-3.5 py-2.5 rounded-full outline-none mb-2"
               style={{ background: C.bg, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "Inter, sans-serif", color: C.textDark }}
             />
